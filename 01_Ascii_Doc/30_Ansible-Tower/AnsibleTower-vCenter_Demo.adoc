@@ -1,0 +1,144 @@
+:scrollbar:
+:data-uri:
+:toc2:
+
+= CloudForms Lab環境を利用した Ansibleデモ環境構築
+
+== はじめに
+
+Ansible Tower を使って vCenter を操作したいのだが、vCenterの環境を準備できないという経験はありませんか？ +
+そんな時は、opentlc のラボ環境上に CloudForms のデモ環境を構築すれば解決!! +
+但し、Ansible Tower が Ver2.4.5 と古いので、こちらは環境構築後に、旧をアンインストール後、最新版を導入します。
+
+
+.CloudForms 環境で利用できる機能 (WebUI)
+[cols="1,4,1,1",options="header"]
+|====
+| Product | URL | User | Password
+| CloudForms  | https://cf-${GUID}.rhpds.opentlc.com | admin | r3dh4t1!
+| RHEV-Manager | https://rhevm-${GUID}.rhpds.opentlc.com/ovirt-engine/webadmin | admin | r3dh4t1!
+| vCenter | https://vcenter-${GUID}.rhpds.opentlc.com:9443/vsphere-client/ | root | r3dh4t1!
+| Ansible-Tower | https://ansible1-${GUID}.rhpds.opentlc.com/ | admin | r3dh4t1!
+| Infoblox | https://ipam-${GUID}.rhpds.opentlc.com/ui/ | admin | r3dh4t1!
+|====
+
+:numbered:
+
+
+== CloudForms Lab 環境入手
+
+=== CloudForms 4.1 Customization Lab 環境作成
+. デモ環境手配
+  https://labs.opentlc.com にアクセスし、Service > Catalogs > CloudForms 4.1 Customization Lab を orderする +
+  プロビジョニングには40分程度かかります。
+
+== Ansible Tower 最新版へのバージョンアップ
+=== Ansible Tower 最新版の取得
+. 次の URL にアクセスし、Ansible Tower の最新版をダウンロードする
+.. https://store.ansible.com/redhat/tower_license/
+
+=== Ansible Tower アーカイブを Ansible Tower サーバへ転送
+. アーカイブをローカルのPCから workstation へ scp
++
+----
+$ scp ansible-tower-setup-latest.tar.gz   mamurai-redhat.com@workstation-${GUID}.rhpds.opentlc.com:./
+----
+. workstation から AnsibleTower1 へ scp
+.. workstation サーバに ssh接続
++
+----
+$ ssh -l mamurai-redhat.com workstation-${GUID}.rhpds.opentlc.com
+----
+  * 接続ユーザー名、接続先の4桁の識別子(コマンド例では、**${GUID}**) は環境に応じて変更が必要。 +
+  このサーバーを経由して各種サーバーにSSH接続します。
+.. root にスイッチ
++
+----
+$ sudo su -
+----
+.. AnsibleTower1 へアーカイブを転送
++
+----
+# scp /home/mamurai-redhat.com/ansible-tower-setup-latest.tar.gz 192.168.0.33:./
+----
+
+=== 旧バージョンの Ansible Tower アンインストール ( v2.4.5)
+. AnsibleTower1 サーバへ ssh接続
++
+----
+# ssh 192.168.0.33
+----
+. yum コマンドでパッケージ削除
++
+----
+# yum remove ansible
+# yum remove ansible-tower
+----
+. Ansible Tower の プレイブック格納ディレクトリの削除
++
+----
+# rm -rf  /var/lib/awx/
+----
+. httpd の停止・無効化
++
+----
+# systemctl stop httpd
+# systemctl disable httpd
+----
+* Web Server が httpd -> nginx に変わったため、不要となる httpd を停止します。
+
+=== Ansible Tower 最新版のインストール (v3.1.2)
+. Ansible-Tower アーカイブファイルを展開
++
+----
+# tar zxvf ansible-tower-setup-latest.tar.gz 
+# cd ansible-tower-setup-3.1.2 
+----
+
+. インベントリファイルの変更
++
+----
+# vi inventory
+
+Ansible Tower で利用する 次の3つのパスワードを設定します
+-------------------
+admin_password=''
+redis_password=''
+pg_password=''
+-------------------
+----
+
+. インストーラーの実行
++
+----
+# ./setup.sh 
+----
+
+=== Ansible Tower 側の設定
+. Organization の作成
+  - 任意の組織を作成　今回は vc-test を作成した。
+. Projectの作成
+  - Playbookの元ネタ：https://github.com/kostanaka/vmware
+  - 上記を Fork し vCenter の IPアドレスを記載している **vcinfo.yml**フ ァイルを修正する。
++
+----
+- vchost: 31.220.66.213  <--- vCenterのアドレスに修正
+----
+  - Project 名は vc-test-proj とした。
+. Inventory の作成
+  - Inventory名：vc-inv: ホストは登録しない。(Playbook 側で vCenterのアドレスを指定している)
+. Credential の作成
+  - vCenter 接続用のID/Passwd  root / r3dh4t1! を クレデンシャルに登録する
+  - クレデンシャル名: root-cred
+. JobTemplateの作成
+  - GuestOS作成 と 削除の playbookを利用してJobTemplateを作成する
++
+|====
+ ^.^| NAME ^.^| JOB TYPE ^.^| INVENTORY ^.^| PROJECT ^.^| PLAYBOOK ^.^| MACHINE CREDENTIAL
+ | 01_createguest .2+^.^| Run .2+^.^| vc-inv .2+^.^| vc-test-pj | createguest.yaml .2+^.^| root-cred
+ | 99_removeguest | httpd-start.yaml
+|====
+* 古いバージョンのJob実行履歴データが残っている。きになる場合は個別に削除してください。
+
+
+以　上
