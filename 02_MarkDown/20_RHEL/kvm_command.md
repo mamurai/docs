@@ -51,9 +51,9 @@ for host in ansible2 host1 host2
 do
   for sn in $(virsh snapshot-list $host --name)
     do
-	  virsh snapshot-delete $host $sn
-	done
-	virsh undefine $host
+      virsh snapshot-delete $host $sn
+    done
+  virsh undefine $host
 done
 ~~~
 
