@@ -96,6 +96,17 @@ ONBOOT="yes"
 
 # systemctl restart network
 ----
+==== /etc/hosts の設定
+----
+# vi /etc/hosts
+
+=== 追記内容 ===
+###
+192.168.99.93 master1.osaka.redhat.com
+192.168.99.98 node1.osaka.redhat.com
+192.168.99.99 node2.osaka.redhat.com
+=== 追記内容 ===
+----
 
 ==== サブスクリプション登録
 
