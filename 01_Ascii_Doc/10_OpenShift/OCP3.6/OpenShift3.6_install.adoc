@@ -1,0 +1,382 @@
+:scrollbar:
+:data-uri:
+:toc2:
+
+
+== OpenShift Container Platform 3.6 Install
+
+ローカル環境 intel に kvm で3サーバ構築しインストールするまでの手順を示す
+
+
+=== サーバ環境
+[[anchor-1]]
+.サーバ一覧
+[cols="1,2,1,1",options="header"]
+|====
+| IP Address	| Host Name | Virt Name | Memory
+| 192.168.99.93	| master1	master1.osaka.redhat.com | master1 | 4GB
+| 192.168.99.98	| node1		node1.osaka.redhat.com | node1 | 4GB
+| 192.168.99.99	| node2		node2.osaka.redhat.com | node2 | 4GB
+|====
+
+
+:numbered:
+
+== サーバ環境構築
+
+=== master1 サーバーの準備
+==== Kvm Clone
+
+まずは1サーバのみ構築。必要なソフトウエア Docker を設定する
+----
+# for host in master1; \
+do 
+virt-clone --original rhel7-min --name $host \
+        --file /var/lib/libvirt/images/OCP/$host.qcow2
+virsh start $host
+done
+----
+
+==== Docker Strage用の仮想Disk作成
+
+. 仮想DISKファイル 10GB を作成
++
+----
+# for host in master1; \
+do
+qemu-img create -f qcow2 /var/lib/libvirt/images/OCP/{$host}_disk2.qcow2 10G
+done
+----
+. kvm 設定ファイルにDISKを追加
++
+----
+# virsh edit master1
+
+===== 次の記述を追記 =====
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/libvirt/images/OCP/master1_disk2.qcow2'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+===== 次の記述を追記 =====
+----
+. GuestOS起動
++
+----
+# virsh start master1
+----
+
+
+==== ホスト名、IPアドレスの変更
+[[anchor-2]]
+----
+# nmcli general hostname master1.osaka.redhat.com
+# vi /etc/sysconfig/network-scripts/ifcfg-eth0
+
+=== 設定内容 ===
+TYPE="Ethernet"
+BOOTPROTO="static"
+IPADDR=192.168.99.93
+NETMASK=255.255.255.0
+NETWORK=192.168.99.0
+GATEWAY=192.168.99.1
+BROADCAST=192.168.99.255
+DNS1=192.168.99.51
+DNS2=8.8.8.8
+DEFROUTE="yes"
+PEERDNS="yes"
+PEERROUTES="yes"
+IPV4_FAILURE_FATAL="no"
+IPV6INIT="no"
+NAME="eth0"
+UUID="6e0f728c-ba49-497d-9738-3fcb023c7c06"
+DEVICE="eth0"
+ONBOOT="yes"
+=== 設定内容 ===
+
+# systemctl restart network
+----
+
+==== サブスクリプション登録
+
+. register with RHSM
++
+----
+# subscription-manager register 
+----
+. pool IDの紐付けを行う
++
+----
+# subscription-manager attach --pool 8a85f98159d214030159d32e0b0d67c3
+----
+. 必要なリポジトリのみサブスクライブする 
++
+----
+# subscription-manager repos --disable="*"
+# subscription-manager repos \
+ --enable="rhel-7-server-rpms" \
+ --enable="rhel-7-server-extras-rpms" \
+ --enable="rhel-7-server-ose-3.6-rpms" \
+ --enable="rhel-7-fast-datapath-rpms"
+----
+
+==== ベースパッケージのインストール
+. 次のパッケージをインストールする
++
+----
+# yum install -y wget git net-tools bind-utils iptables-services bridge-utils bash-completion kexec-tools sos psacct
+----
+. 最新のパッケージにアップデート
++
+----
+# yum update -y
+----
+
+
+==== Docker インストール
+
+. install Docker 1.12
++
+----
+# yum install docker-1.12.6 -y
+----
+. **/etc/sysconfig/docker** ファイルの OPTION に `--insecure-registry 172.30.0.0/16` を追加する
++
+----
+# sed -i.orig -e 's/--selinux-enabled --log-driver=journald --signature-verification=false/--selinux-enabled --log-driver=journald --signature-verification=false --insecure-registry 172.30.0.0\/16/g' /etc/sysconfig/docker
+----
+. /etc/sysconfig/docker ファイルの変更確認
++
+----
+# diff /etc/sysconfig/docker /etc/sysconfig/docker.orig
+----
+. Docker Strage Disk Setup
++
+----
+# cat <<EOF > /etc/sysconfig/docker-storage-setup
+DEVS=/dev/vdb
+VG=docker-vg
+EOF
+
+# docker-storage-setup
+----
+. Docker サービス起動設定
++
+----
+# systemctl enable docker
+# systemctl restart docker
+----
+
+
+=== node側サーバの準備
+==== Kvm Clone
+
+. node 2サーバの構築。上記で作成した master1 を clone する
++
+----
+# for host in node1 node2; \
+do 
+virt-clone --original master1 --name $host \
+        --file /var/lib/libvirt/images/OCP/$host.qcow2 --file /var/lib/libvirt/images/OCP/${host}_disk2.qcow2
+done
+----
+. GuestOS起動
++
+----
+# for host in node1 node2; \
+do
+virsh start $host
+done
+----
+
+
+==== ホスト名、IPアドレスの変更
+
+----
+# nmcli general hostname node1.osaka.redhat.com
+# vi /etc/sysconfig/network-scripts/ifcfg-eth0
+----
+* 設定値については以下のリンクを参照してください。
+** <<anchor-1,IPアドレス>>
+** <<anchor-2,ifcfg-eth0 の設定例>>
+
+==== サブスクリプション登録
+. register with RHSM
++
+----
+# subscription-manager register --force 
+----
+. pool IDの紐付けを行う
++
+----
+# subscription-manager attach --pool=8a85f98159d214030159d32e0b0d67c3
+----
+. 必要なリポジトリのみサブスクライブする
++
+----
+# subscription-manager repos --disable="*"
+# subscription-manager repos \
+ --enable="rhel-7-server-rpms" \
+ --enable="rhel-7-server-extras-rpms" \
+ --enable="rhel-7-server-ose-3.6-rpms" \
+ --enable="rhel-7-fast-datapath-rpms"
+----
+
+== 個別設定
+
+=== master1
+
+==== 個別パッケージのインストール
+. OpenShift Container Platform utilites のインストール
++
+----
+# yum install atomic-openshift-utils
+----
+
+==== SSH KeyPair の準備
+
+. ssh key の作成
++
+----
+# ssh-keygen
+----
+. ssh client の設定
++
+----
+echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
+----
+. ssh public key の配布
++
+----
+# for node in master1 node1 node2
+do
+ssh-copy-id -i ~/.ssh/id_rsa.pub ${node}
+done
+----
+
+==== インベントリーファイルの準備
+/etc/ansible/hosts を準備する。 パラメータは https://github.com/openshift/openshift-ansible/blob/master/inventory/byo/hosts.ose.example[こちら] を参照
+
+----
+# Create an OSEv3 group that contains the masters and nodes groups
+[OSEv3:children]
+masters
+etcd
+nodes
+
+# Set variables common for all OSEv3 hosts
+[OSEv3:vars]
+# SSH user, this user should allow ssh based auth without requiring a password
+ansible_ssh_user=root
+
+# OpenShift Deployment, enterprise of course!
+openshift_deployment_type=openshift-enterprise
+
+#Set Domain for Apps
+openshift_master_default_subdomain=cloudapps.osaka.redhat.com
+
+# Enable htpasswd authentication; defaults to DenyAllPasswordIdentityProvider
+openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 'challenge': 'true', 'kind': 'HTPasswdPasswordIdentityProvider', 'filename': '/etc/origin/master/htpasswd'}]
+
+# Deploy logging
+openshift_hosted_logging_deploy=true
+openshift_hosted_logging_storage_kind=dynamic
+
+#Deploy Metrics
+openshift_hosted_metrics_deploy=true
+
+#Disable disk and memory checks
+openshift_disable_check=disk_availability,memory_availability
+
+# host group for masters
+[masters]
+master1.osaka.redhat.com
+
+# host group for etcd
+[etcd]
+master1.osaka.redhat.com
+
+# host group for nodes, includes region info
+[nodes]
+master1.osaka.redhat.com openshift_schedulable=True openshift_node_labels="{'region': 'infra', 'zone': 'default'}"
+node1.osaka.redhat.com openshift_schedulable=True openshift_node_labels="{'region': 'primary', 'zone': 'prod'}"
+node2.osaka.redhat.com openshift_schedulable=True openshift_node_labels="{'region': 'primary', 'zone': 'prod'}"
+----
+
+=== OpenShift インストール前環境の保存
+全サーバを停止しスナップショットを取得。既にインストール実行前の準備は終了している。
+
+. スナップショットの取得
++
+----
+# for host in master1 node1 node2; \
+do
+virsh snapshot-create-as $host sn_${host}_before-install
+done
+----
+
+. スナップショットの取得確認
++
+----
+# for host in master1 node1 node2; \
+do
+virsh snapshot-list $host
+done
+----
+. [参考]スナップショットの切り戻し
++
+----
+# for host in master1 node1 node2; \
+do
+virsh snapshot-revert $host sn_${host}_before-install
+done
+----
+
+
+== OpenShift のインストール (master1)
+=== Memory が少ないサーバでインストールする場合、チェックロジックをスキップ
+----
+# vi /usr/share/ansible/openshift-ansible/playbooks/common/openshift-cluster/config.yml
+
+=== この記述をコメントアウト===
+#      - memory_availability
+#      - docker_image_availability
+=== この記述をコメントアウト===
+
+----
+=== Advanced Installation の実行
+----
+# ansible-playbook /usr/share/ansible/openshift-ansible/playbooks/byo/config.yml
+----
+
+=== Webログイン用の管理者アカウント作成
+
+. ログイン用のBasic認証アカウント作成
++
+----
+# touch /etc/origin/master/htpasswd
+# htpasswd -b /etc/origin/master/htpasswd ocpadm r3dh4t1!
+# htpasswd -b /etc/origin/master/htpasswd mamurai 1qaz2wsx
+----
+. oscadm に管理者権限を付与
++
+----
+# oadm policy add-cluster-role-to-user cluster-admin ocpadm
+----
+
+=== インストール後の動作確認
+. https://master1.osaka.redhat.com:8443 にアクセスし OpenShift Consoleから動作を確認する
+
+=== OpenShift インストール後環境の保存
+
+. スナップショットの取得
++
+----
+# for host in master1 node1 node2; \
+do
+virsh snapshot-create-as $host sn_${host}_after-install
+virsh snapshot-list $host
+done
+----
+
+
